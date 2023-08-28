@@ -1,224 +1,188 @@
+#include <algorithm>
 #include <cmath>
+#include <deque>
 #include <iostream>
 #include <memory>
 #include <stack>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-class Graph {
-public:
-  Graph() = default;
-  void emitDot() const;
+using ID = uint64_t;
 
-  class Edge;
+using Edge = std::pair<ID, ID>;
 
-  class Node {
-    size_t id_;
-    std::string name_;
-    std::vector<std::weak_ptr<Edge>> ins_;
-    std::vector<std::weak_ptr<Edge>> outs_;
+// bool operator==(const Edge &lhs, const Edge &rhs) {
+// return lhs.first == rhs.first && lhs.second == rhs.second;
+//}
 
-  public:
-    Node(size_t id, const std::string &name) {
-      id_ = id;
-      name_ = name;
-    }
-
-    void addOutEdge(std::shared_ptr<Edge> edge) { ins_.emplace_back(edge); }
-
-    void addInEdge(std::shared_ptr<Edge> edge) { outs_.emplace_back(edge); }
-
-    std::string getName() const { return name_; }
-
-    std::vector<std::weak_ptr<Edge>> getOuts() { return outs_; }
-
-    std::vector<std::weak_ptr<Edge>> getIns() { return ins_; }
-  };
-
-  class Edge {
-    std::weak_ptr<Node> src_;
-    std::weak_ptr<Node> dst_;
-    double weight_;
-
-  public:
-    Edge(std::shared_ptr<Node> src, std::shared_ptr<Node> dst, double weight) {
-      src_ = src;
-      dst_ = dst;
-      weight_ = weight;
-    }
-
-    std::weak_ptr<Node> getSrc() { return src_; }
-
-    std::weak_ptr<Node> getDst() { return dst_; }
-
-    void clearSrcDst() {
-      src_.reset();
-      dst_.reset();
-    }
-
-    double getWeight() const { return weight_; }
-    void setWeight(double weight) { weight_ = weight; }
-  };
-
-  void addNode(const std::string &name) {
-    nodes_.emplace_back(std::make_shared<Node>(id, name));
-    idToNode_.insert({id, nodes_.back()});
-    nameToNode_.insert({name, nodes_.back()});
-
-    ++id;
+struct EdgeHash {
+  size_t operator()(const Edge &e) const {
+    std::hash<ID> hash;
+    return hash(e.first) ^ (hash(e.second) << 1);
   }
-
-  void addEdge(const std::string &src, const std::string &dst, double weight);
-
-  std::vector<std::weak_ptr<Node>> getNodes() {
-    std::vector<std::weak_ptr<Node>> result;
-
-    for (const auto &node : nodes_) {
-      result.emplace_back(node);
-    }
-
-    return result;
-  }
-
-private:
-  size_t id = 0;
-  std::vector<std::shared_ptr<Node>> nodes_;
-  std::vector<std::shared_ptr<Edge>> edges_;
-  std::unordered_map<size_t, std::weak_ptr<Node>> idToNode_;
-  std::unordered_map<std::string, std::weak_ptr<Node>> nameToNode_;
 };
 
-void Graph::addEdge(const std::string &src, const std::string &dst,
-                    double weight) {
-  std::shared_ptr<Node> srcNode = nullptr;
-  std::shared_ptr<Node> dstNode = nullptr;
-  try {
-    srcNode = nameToNode_.at(src).lock();
-    dstNode = nameToNode_.at(dst).lock();
-  } catch (const std::exception &exc) {
-    std::cout << "Trying to connect unexisting nodes!\n"
-              << '\t' << "src: " << src << '\n'
-              << '\t' << "dst: " << dst << '\n';
-    return;
+class Graph {
+  using Matrix = std::vector<std::vector<double>>;
+  size_t numberOfVertice_;
+  Matrix matrix_;
+
+  std::unordered_map<ID, std::string> idToName_;
+  std::unordered_map<ID, double> idToPaid_;
+
+  std::vector<std::vector<ID>> cycles_;
+
+public:
+  Graph(std::unordered_map<ID, std::string> &&idToName,
+        std::unordered_map<ID, double> &&idToPaid) {
+    idToName_ = std::move(idToName);
+    idToPaid_ = std::move(idToPaid);
+
+    numberOfVertice_ = idToName_.size();
+
+    matrix_ = std::vector<std::vector<double>>(
+        numberOfVertice_, std::vector<double>(numberOfVertice_, 0));
   }
 
-  if (!srcNode || !dstNode) {
-    std::cout << "Couldn't get some of the nodes!\n"
-              << '\t' << "src: " << src << '\n'
-              << '\t' << "dst: " << dst << '\n';
-    return;
+  void addEdge(ID from, ID to, double weight) {
+    matrix_.at(from).at(to) = weight;
   }
 
-  edges_.emplace_back(std::make_shared<Edge>(srcNode, dstNode, weight));
-  srcNode->addOutEdge(edges_.back());
-  dstNode->addInEdge(edges_.back());
-}
+  void createQualShareEdges();
+  void findCycles();
+
+  void emitDot() const;
+};
 
 void Graph::emitDot() const {
-  std::cout << "Emitting graphviz dot description:\n";
-
   std::cout << "digraph G {\n";
-
-  for (const auto &edge : edges_) {
-    auto src = edge->getSrc().lock();
-    auto dst = edge->getDst().lock();
-    if (!src || !dst) {
-      std::cout << "Dangling edge found!\n";
-      continue;
+  for (size_t id1 = 0; id1 < numberOfVertice_; ++id1) {
+    for (size_t id2 = 0; id2 < numberOfVertice_; ++id2) {
+      double weight = matrix_.at(id1).at(id2);
+      if (fabs(weight) < 0.001) {
+        continue;
+      }
+      std::cout << '\t' << idToName_.at(id1) << "->" << idToName_.at(id2)
+                << " [label=" << weight << "]\n";
     }
-
-    std::cout << '\t' << src->getName() << " -> " << dst->getName()
-              << " [ label = " << edge->getWeight() << " ]\n";
   }
-
   std::cout << "}\n";
 }
 
-void buildGraph(Graph &g) {
-  std::vector<std::string> names = {"Gleb", "Vasya", "Vanya", "Djan"};
-  std::unordered_map<std::string, double> nameToPaid;
-  nameToPaid.insert({"Gleb", 3000});
-  nameToPaid.insert({"Vasya", 2000});
-  nameToPaid.insert({"Vanya", 1000});
+void Graph::createQualShareEdges() {
+  for (size_t from = 0; from < numberOfVertice_; ++from) {
+    for (size_t to = 0; to < numberOfVertice_; ++to) {
+      double equalShare = idToPaid_.at(to) / numberOfVertice_;
 
-  for (const auto &name : names) {
-    g.addNode(name);
-  }
-
-  for (const auto &[name_paid, paid] : nameToPaid) {
-    for (const auto &name : names) {
-      g.addEdge(name, name_paid, paid / names.size());
+      addEdge(from, to, equalShare);
     }
   }
 }
 
-void findCycles(Graph &g) {
-  for (auto &node : g.getNodes()) {
-    auto gNode = node.lock();
-    if (!gNode) {
-      continue;
-    }
+void Graph::findCycles() {
+  // main cycle: traverse all vertice
+  for (size_t from = 0; from < numberOfVertice_; ++from) {
+    // std::deque<ID> path;
+    // path.push_back(from);
+    //
 
-    std::stack<std::shared_ptr<Graph::Node>> dsts;
-    auto outEdges = gNode->getOuts();
-    for (auto &outEdge : outEdges) {
-      auto gOutEdge = outEdge.lock();
-      if (!gOutEdge) {
-        continue;
+    std::cout << "checking " << idToName_.at(from) << '\n';
+
+    std::stack<ID> dfsStack;
+    dfsStack.push(from);
+
+    std::vector<bool> visited(numberOfVertice_, false);
+    std::unordered_set<Edge, EdgeHash> bannedEdge;
+
+    ID prevVertexID = 0;
+
+    while (!dfsStack.empty()) {
+      ID dst = dfsStack.top();
+      dfsStack.pop();
+
+      // found a cycle
+      if (dst == from) {
+        std::cout << "found cycle!\n";
+        // remember the path
+        // std::vector<ID> tmp;
+        // for (const auto &id : path) {
+        // tmp.push_back(id);
+        //}
+        // cycles_.emplace_back(std::move(tmp));
+
+        // path.pop_back();
+
+        // reset visited flag to discover all paths
+        // std::for_each(visited.begin(), visited.end(),
+        //[](auto &&flag) { flag = false; });
+        visited.at(prevVertexID) = false;
+
+        std::cout << "banning edge " << idToName_.at(prevVertexID) << " -> "
+                  << idToName_.at(dst) << '\n';
+        bannedEdge.insert({prevVertexID, dst});
       }
 
-      auto dstNode = gOutEdge->getDst().lock();
-      if (!dstNode) {
+      if (visited.at(dst)) {
         continue;
       }
+      visited.at(dst) = true;
 
-      for (auto &dstOutEdge : dstNode->getOuts()) {
-        auto gDstOutEdge = dstOutEdge.lock();
-        if (!gOutEdge) {
+      for (size_t to = 0; to < numberOfVertice_; ++to) {
+        if (auto it = bannedEdge.find({dst, to}); it != bannedEdge.end()) {
           continue;
         }
 
-        auto dstOutNode = gDstOutEdge->getDst().lock();
-        if (!dstNode) {
+        double weight = matrix_.at(dst).at(to);
+        if (weight < 0.001) {
           continue;
         }
 
-        if (dstOutNode == gNode) {
-          std::cout << "Found a cycle!\n"
-                    << '\t' << gNode->getName() << " -- " << dstNode->getName()
-                    << " -- " << dstOutNode->getName() << '\n';
-          auto outWeight = gOutEdge->getWeight();
-          auto dstOutWeight = gDstOutEdge->getWeight();
-          if (outWeight > dstOutWeight) {
-            gOutEdge->setWeight(outWeight - dstOutWeight);
-            gDstOutEdge->setWeight(0);
-          } else {
-            gDstOutEdge->setWeight(dstOutWeight - outWeight);
-            gOutEdge->setWeight(0);
-          }
-          break;
-        }
+        dfsStack.push(to);
       }
-    }
 
-    while (!dsts.empty()) {
-      auto currentNode = dsts.top();
-      dsts.pop();
-
-      for (auto &outEdge : currentNode->getOuts()) {
-      }
+      prevVertexID = dst;
     }
+  }
+
+  for (const auto cycle : cycles_) {
+    std::cout << '\t';
+    for (const auto &id : cycle) {
+      std::cout << idToName_.at(id) << " -> ";
+    }
+    std::cout << '\n';
   }
 }
 
 int main() {
-  Graph g;
-  buildGraph(g);
+  ID i = 0;
+  std::unordered_map<ID, std::string> idToName;
+  std::unordered_map<ID, double> idToPaid;
+
+  idToPaid.insert({i, 3000});
+  idToName.insert({i++, "Gleb"});
+
+  idToPaid.insert({i, 2000});
+  idToName.insert({i++, "Vasya"});
+
+  idToPaid.insert({i, 1000});
+  idToName.insert({i++, "Vanya"});
+
+  idToPaid.insert({i, 0});
+  idToName.insert({i++, "Djan"});
+
+  for (size_t j = 0; j < i; ++j) {
+    std::cout << '\t' << "id=" << j << ' ' << idToName.at(j) << " paid "
+              << idToPaid.at(j) << '\n';
+  }
+
+  Graph g(std::move(idToName), std::move(idToPaid));
+  g.createQualShareEdges();
   g.emitDot();
+  g.findCycles();
+
   /*
-  std::unordered_map<size_t, std::string> idToName;
-  std::unordered_map<std::string, size_t> nameToId;
 
   size_t i{0};
 
